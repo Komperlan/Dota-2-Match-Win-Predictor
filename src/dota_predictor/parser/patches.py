@@ -66,6 +66,14 @@ class PatchRegistry:
         return min(patch.started_at for patch in family_patches)
 
 
+def normalize_patch_family(value: str) -> str:
+    normalized = value.strip()
+    without_trailing_dot = normalized.removesuffix(".")
+    if without_trailing_dot != normalized and NUMBERED_PATCH_RE.fullmatch(without_trailing_dot):
+        return without_trailing_dot
+    return normalized
+
+
 def _patch_from_mapping(value: Any) -> Patch:
     if not isinstance(value, dict):
         msg = "Each patch entry must be a mapping"

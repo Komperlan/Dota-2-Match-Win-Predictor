@@ -11,7 +11,7 @@ from dota_predictor.parser.collector import collect_public_matches, collect_stea
 from dota_predictor.parser.config import ParserConfig, load_parser_config
 from dota_predictor.parser.normalizer import normalize_public_matches, normalize_steam_matches
 from dota_predictor.parser.parquet_store import ParquetMatchWriter
-from dota_predictor.parser.patches import PatchRegistry
+from dota_predictor.parser.patches import PatchRegistry, normalize_patch_family
 from dota_predictor.parser.quality import QualityIssueWriter
 from dota_predictor.parser.raw_store import RawPublicMatchStore
 from dota_predictor.parser.source import OpenDotaSource, SteamWebApiSource
@@ -180,7 +180,8 @@ def _resolve_collection_config(
             msg = "No numbered patch family found in patch registry"
             raise ValueError(msg)
 
-    family_start = patch_registry.patch_family_start(str(patch_family))
+    patch_family = normalize_patch_family(str(patch_family))
+    family_start = patch_registry.patch_family_start(patch_family)
     if family_start is None:
         msg = f"Patch family not found in patch registry: {patch_family}"
         raise ValueError(msg)
