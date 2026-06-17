@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from argparse import Namespace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dota_predictor.parser.cli import _resolve_collection_config
+from dota_predictor.parser.cli import _configure_logging, _resolve_collection_config
 from dota_predictor.parser.config import ParserConfig
 
 
@@ -32,3 +33,13 @@ patches:
     )
 
     assert config.collection_min_start_time == datetime(2026, 3, 24, 7, tzinfo=UTC)
+
+
+def test_configure_logging_suppresses_http_client_info_logs() -> None:
+    logging.getLogger("httpx").setLevel(logging.NOTSET)
+    logging.getLogger("httpcore").setLevel(logging.NOTSET)
+
+    _configure_logging("INFO")
+
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING

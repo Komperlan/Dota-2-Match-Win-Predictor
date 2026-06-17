@@ -108,6 +108,9 @@ export STEAM_WEB_API_KEY="your_key"
 uv run dota-parser parse-steam --limit 100
 ```
 
+Не публикуй Steam/OpenDota API keys в чатах, логах и git. Если ключ случайно засветился,
+лучше перевыпустить его.
+
 Основной рекомендуемый источник для следующей итерации - Steam Web API: он ближе к
 первичным данным Valve. OpenDota остаётся полезным как быстрый публичный источник и
 резервная проверка.
@@ -138,8 +141,8 @@ uv run dota-parser collect-steam --all --latest-patch-family
 uv run dota-parser normalize-steam
 ```
 
-Например, если последний номерной патч в registry - `7.39`, команда соберёт матчи с
-начала `7.39` и захватит `7.39b`, `7.39c` и другие буквенные подпачи, пока они входят в
+Например, если последний номерной патч в registry - `7.41`, команда соберёт матчи с
+начала `7.41` и захватит `7.41a`, `7.41b` и другие буквенные подпачи, пока они входят в
 тот же patch family.
 
 ## CLI
@@ -179,7 +182,7 @@ uv run dota-parser collect-public --limit 1000
 | --- | --- | --- |
 | `--limit INT` | `100` | Максимум raw rows обработать за этот запуск. |
 | `--all` | off | Собирать страницы до пустого ответа или patch cutoff. Нельзя использовать вместе с `--limit`. |
-| `--patch-family PATCH` | off | Остановить сбор, когда parser дойдёт до матчей старше начала указанного номерного семейства, например `7.39`. |
+| `--patch-family PATCH` | off | Остановить сбор, когда parser дойдёт до матчей старше начала указанного номерного семейства, например `7.41`. |
 | `--latest-patch-family` | off | Взять последнее номерное семейство из `configs/patches.yaml`; буквенные подпачи входят автоматически. |
 
 ### `normalize-public`
@@ -209,6 +212,10 @@ uv run dota-parser collect-steam --limit 100
 Steam collector делает минимум два типа запросов: одну страницу `GetMatchHistory`, затем
 по одному `GetMatchDetails` на каждый матч из выбранной страницы. Поэтому полный сбор
 через Steam API заметно дороже по числу запросов, чем OpenDota `/publicMatches`.
+
+Steam API иногда отвечает `5xx` на конкретный `GetMatchDetails`. Parser повторяет запрос
+по retry/backoff, а после исчерпания retry пропускает только этот `match_id` и продолжает
+сбор. Такие пропуски видны в `failed` counter в итоговом логе и checkpoint.
 
 Флаги такие же, как у `collect-public`:
 
@@ -272,7 +279,7 @@ uv run dota-parser normalize-public
 Если хочешь явно указать семейство:
 
 ```bash
-uv run dota-parser collect-public --all --patch-family 7.39
+uv run dota-parser collect-public --all --patch-family 7.41
 uv run dota-parser normalize-public
 ```
 
@@ -280,7 +287,7 @@ uv run dota-parser normalize-public
 
 ```bash
 export STEAM_WEB_API_KEY="your_key"
-uv run dota-parser collect-steam --all --patch-family 7.39
+uv run dota-parser collect-steam --all --patch-family 7.41
 uv run dota-parser normalize-steam
 ```
 
@@ -292,9 +299,9 @@ uv run dota-parser collect-steam --all --latest-patch-family
 uv run dota-parser normalize-steam
 ```
 
-`--patch-family 7.39` означает: остановиться, когда сбор дошёл до матчей старше начала
-`7.39`. Нормализация всё равно назначит точный `patch_id` по интервалам из
-`configs/patches.yaml`: `7.39`, `7.39b`, `7.39c` и так далее.
+`--patch-family 7.41` означает: остановиться, когда сбор дошёл до матчей старше начала
+`7.41`. Нормализация всё равно назначит точный `patch_id` по интервалам из
+`configs/patches.yaml`: `7.41`, `7.41a`, `7.41b` и так далее.
 
 Этот режим использует тот же checkpoint:
 
@@ -353,7 +360,7 @@ export OPENDOTA_API_KEY="your_key"
 - Следи за размером `data/raw/opendota/public_matches`.
 - Не удаляй checkpoint, если хочешь продолжать, а не начинать сначала.
 - Для обучения всё равно нужен корректный `configs/patches.yaml`, иначе `patch_id` будет
-  только bootstrap или матчи попадут в quality issues при строгом каталоге.
+  попадать в quality issues как unknown patch.
 
 ## Как спарсить всю Steam history
 
@@ -409,14 +416,14 @@ uv run dota-parser normalize-steam
 
 ```yaml
 patches:
-  - patch_id: "7.39"
-    version: "7.39"
-    started_at: "2025-05-22T00:00:00Z"
-    ended_at: "2025-06-10T00:00:00Z"
+  - patch_id: "7.41"
+    version: "7.41"
+    started_at: "2026-03-24T07:00:00Z"
+    ended_at: "2026-03-27T07:00:00Z"
     major: true
-  - patch_id: "7.39b"
-    version: "7.39b"
-    started_at: "2025-06-10T00:00:00Z"
+  - patch_id: "7.41a"
+    version: "7.41a"
+    started_at: "2026-03-27T07:00:00Z"
     ended_at: null
     major: false
 ```
@@ -427,16 +434,16 @@ patches:
 patch.started_at <= match.start_time < patch.ended_at
 ```
 
-Сейчас в репозитории лежит bootstrap interval. Перед реальным обучением его нужно заменить
-на проверенные даты патчей Dota 2.
+Сейчас в репозитории заполнено семейство `7.41` из официального Dota 2 datafeed.
+Для будущих патчей нужно добавлять новые интервалы перед сбором и обучением.
 
 Patch family - это номерной патч и все буквенные подпачи с тем же префиксом. Например:
 
 ```text
-7.39 family = 7.39, 7.39b, 7.39c, 7.39d
+7.41 family = 7.41, 7.41a, 7.41b, 7.41c, 7.41d
 ```
 
-`--latest-patch-family` ищет последний `patch_id` формата `N.NN`, например `7.39`, и
+`--latest-patch-family` ищет последний `patch_id` формата `N.NN`, например `7.41`, и
 использует начало этого патча как cutoff для сбора.
 
 ## Фильтры качества

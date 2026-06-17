@@ -17,12 +17,13 @@ from dota_predictor.parser.raw_store import RawPublicMatchStore
 from dota_predictor.parser.source import OpenDotaSource, SteamWebApiSource
 
 LOGGER = logging.getLogger(__name__)
+SENSITIVE_LOGGERS = ("httpx", "httpcore")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(level=getattr(logging, str(args.log_level).upper()))
+    _configure_logging(str(args.log_level))
 
     config = load_parser_config(args.config)
     if args.command == "collect-public":
@@ -100,6 +101,12 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_logging(log_level: str) -> None:
+    logging.basicConfig(level=getattr(logging, log_level.upper()))
+    for logger_name in SENSITIVE_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
 def _collect_opendota(config: ParserConfig, limit: int | None) -> object:
     raw_store = RawPublicMatchStore(config.raw_output_dir, schema_version=config.schema_version)
     checkpoint_store = CheckpointStore(config.checkpoint_file)
@@ -146,7 +153,7 @@ def _add_collection_limit_flags(parser: argparse.ArgumentParser) -> None:
     patch_group.add_argument(
         "--patch-family",
         help="Collect only matches at or after the start of this numbered patch family, "
-        "for example 7.39 includes 7.39, 7.39b, 7.39c.",
+        "for example 7.41 includes 7.41, 7.41a, 7.41b.",
     )
     patch_group.add_argument(
         "--latest-patch-family",

@@ -230,3 +230,60 @@ def test_collect_steam_fetches_history_then_details(parser_config: ParserConfig)
     assert requested_paths.count("/IDOTA2Match_570/GetMatchHistory/v1/") == 1
     assert requested_paths.count("/IDOTA2Match_570/GetMatchDetails/v1/") == 2
     assert len(list(parser_config.steam_raw_output_dir.rglob("*.json"))) == 2
+
+
+def test_collect_steam_skips_match_details_after_repeated_5xx(
+    parser_config: ParserConfig,
+) -> None:
+    config = replace(
+        parser_config,
+        max_retries=0,
+        request_delay_seconds=0,
+        backoff_initial_seconds=0,
+        backoff_max_seconds=0,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/GetMatchHistory/v1/"):
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "status": 1,
+                        "num_results": 2,
+                        "results_remaining": 0,
+                        "matches": [
+                            steam_match_history_payload(match_id=900),
+                            steam_match_history_payload(match_id=899),
+                        ],
+                    }
+                },
+            )
+        match_id = int(request.url.params["match_id"])
+        if match_id == 900:
+            return httpx.Response(500, text="bad")
+        return httpx.Response(200, json=steam_match_details_payload(match_id=match_id))
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url=config.steam_base_url,
+    )
+    source = SteamWebApiSource(
+        config,
+        client=client,
+        sleep=lambda _: None,
+        api_key="test-key",
+    )
+
+    result = collect_steam_matches(
+        source=source,
+        raw_store=RawPublicMatchStore(config.steam_raw_output_dir, schema_version=1),
+        checkpoint_store=CheckpointStore(config.steam_checkpoint_file),
+        config=config,
+        limit=2,
+    )
+
+    assert result.fetched == 1
+    assert result.failed == 1
+    assert result.written == 1
+    assert len(list(config.steam_raw_output_dir.rglob("*.json"))) == 1

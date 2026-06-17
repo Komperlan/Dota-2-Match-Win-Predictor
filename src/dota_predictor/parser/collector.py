@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+import httpx
 
 from dota_predictor.parser.checkpoint import CheckpointStore
 from dota_predictor.parser.config import ParserConfig
 from dota_predictor.parser.models import now_utc, unix_seconds_to_utc
 from dota_predictor.parser.raw_store import RawPublicMatchStore
 from dota_predictor.parser.source import OpenDotaSource, SteamWebApiSource
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,7 @@ class CollectionResult:
     pages: int
     last_less_than_match_id: int | None
     stopped_by_start_time: bool
+    failed: int = 0
 
     @property
     def counters(self) -> dict[str, int]:
@@ -29,6 +35,7 @@ class CollectionResult:
             "duplicates": self.duplicates,
             "skipped_by_start_time": self.skipped_by_start_time,
             "pages": self.pages,
+            "failed": self.failed,
         }
 
 
@@ -141,6 +148,7 @@ def collect_steam_matches(
     skipped_by_start_time = 0
     pages = 0
     processed = 0
+    failed = 0
     stopped_by_start_time = False
 
     while limit is None or processed < limit:
@@ -168,7 +176,18 @@ def collect_steam_matches(
 
         for match in batch:
             match_id = int(match["match_id"])
-            payload = source.fetch_match_details(match_id=match_id)
+            try:
+                payload = source.fetch_match_details(match_id=match_id)
+            except httpx.HTTPStatusError as exc:
+                if not _should_skip_steam_match_details_error(exc):
+                    raise
+                failed += 1
+                LOGGER.warning(
+                    "Skipping Steam match %s after repeated GetMatchDetails status %s",
+                    match_id,
+                    exc.response.status_code,
+                )
+                continue
             result = raw_store.save(
                 payload,
                 source=source.source_name,
@@ -193,6 +212,7 @@ def collect_steam_matches(
                     "fetched": fetched,
                     "written": written,
                     "duplicates": duplicates,
+                    "failed": failed,
                     "skipped_by_start_time": skipped_by_start_time,
                     "pages": pages,
                 },
@@ -215,6 +235,7 @@ def collect_steam_matches(
         pages=pages,
         last_less_than_match_id=start_at_match_id,
         stopped_by_start_time=stopped_by_start_time,
+        failed=failed,
     )
 
 
@@ -234,3 +255,7 @@ def _filter_by_min_start_time(
             continue
         selected.append(payload)
     return selected, reached_min_start_time
+
+
+def _should_skip_steam_match_details_error(exc: httpx.HTTPStatusError) -> bool:
+    return 500 <= exc.response.status_code <= 599
