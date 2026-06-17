@@ -25,7 +25,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = load_parser_config(args.config)
     if args.command == "collect-public":
-        result = _collect(config, args.limit)
+        result = _collect(config, _resolve_limit(args))
         LOGGER.info("Collected public matches: %s", result)
         return 0
 
@@ -35,7 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "parse-public":
-        collection = _collect(config, args.limit)
+        collection = _collect(config, _resolve_limit(args))
         normalization = _normalize(config, args.patches)
         LOGGER.info("Collected public matches: %s", collection)
         LOGGER.info("Normalized public matches: %s", normalization)
@@ -53,16 +53,16 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     collect = subparsers.add_parser("collect-public")
-    collect.add_argument("--limit", type=int, default=100)
+    _add_collection_limit_flags(collect)
 
     subparsers.add_parser("normalize-public")
 
     parse = subparsers.add_parser("parse-public")
-    parse.add_argument("--limit", type=int, default=100)
+    _add_collection_limit_flags(parse)
     return parser
 
 
-def _collect(config: ParserConfig, limit: int) -> object:
+def _collect(config: ParserConfig, limit: int | None) -> object:
     raw_store = RawPublicMatchStore(config.raw_output_dir, schema_version=config.schema_version)
     checkpoint_store = CheckpointStore(config.checkpoint_file)
     with OpenDotaSource(config) as source:
@@ -73,6 +73,29 @@ def _collect(config: ParserConfig, limit: int) -> object:
             config=config,
             limit=limit,
         )
+
+
+def _add_collection_limit_flags(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of public match rows to process in this run. Default: 100.",
+    )
+    group.add_argument(
+        "--all",
+        action="store_true",
+        help="Keep paginating until OpenDota returns an empty page.",
+    )
+
+
+def _resolve_limit(args: argparse.Namespace) -> int | None:
+    if bool(args.all):
+        return None
+    if args.limit is None:
+        return 100
+    return int(args.limit)
 
 
 def _normalize(config: ParserConfig, patches_path: Path) -> object:

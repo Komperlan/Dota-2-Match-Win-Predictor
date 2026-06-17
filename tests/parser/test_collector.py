@@ -66,6 +66,40 @@ def test_collect_resumes_from_checkpoint(parser_config: ParserConfig) -> None:
     assert seen_less_than == ["101"]
 
 
+def test_collect_all_stops_on_empty_page(parser_config: ParserConfig) -> None:
+    pages = [
+        [public_match_payload(match_id=300), public_match_payload(match_id=299)],
+        [public_match_payload(match_id=298)],
+        [],
+    ]
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        page = pages[calls]
+        calls += 1
+        return httpx.Response(200, json=page)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url=parser_config.source_base_url,
+    )
+    source = OpenDotaSource(parser_config, client=client, sleep=lambda _: None)
+
+    result = collect_public_matches(
+        source=source,
+        raw_store=RawPublicMatchStore(parser_config.raw_output_dir, schema_version=1),
+        checkpoint_store=CheckpointStore(parser_config.checkpoint_file),
+        config=parser_config,
+        limit=None,
+    )
+
+    assert result.fetched == 3
+    assert result.written == 3
+    assert result.pages == 3
+    assert result.last_less_than_match_id == 298
+
+
 def test_retry_after_429(parser_config: ParserConfig) -> None:
     calls = 0
     sleeps: list[float] = []

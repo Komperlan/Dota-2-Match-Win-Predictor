@@ -33,9 +33,9 @@ def collect_public_matches(
     raw_store: RawPublicMatchStore,
     checkpoint_store: CheckpointStore,
     config: ParserConfig,
-    limit: int,
+    limit: int | None,
 ) -> CollectionResult:
-    if limit <= 0:
+    if limit is not None and limit <= 0:
         msg = "limit must be greater than zero"
         raise ValueError(msg)
 
@@ -47,7 +47,7 @@ def collect_public_matches(
     pages = 0
     processed = 0
 
-    while processed < limit:
+    while limit is None or processed < limit:
         page = source.fetch_public_matches(
             less_than_match_id=less_than_match_id,
             min_rank=config.min_rank,
@@ -58,8 +58,8 @@ def collect_public_matches(
             break
 
         sorted_page = sorted(page, key=lambda item: int(item["match_id"]), reverse=True)
-        remaining = limit - processed
-        batch = sorted_page[:remaining]
+        remaining = None if limit is None else limit - processed
+        batch = sorted_page if remaining is None else sorted_page[:remaining]
         fetched += len(batch)
         fetched_at = now_utc()
 
@@ -78,6 +78,8 @@ def collect_public_matches(
             processed_match_ids.append(int(payload["match_id"]))
 
         processed += len(batch)
+        if not processed_match_ids:
+            break
         if processed_match_ids:
             less_than_match_id = min(processed_match_ids)
             checkpoint_store.save(
@@ -89,7 +91,7 @@ def collect_public_matches(
                     "pages": pages,
                 },
             )
-        if len(batch) < len(sorted_page):
+        if limit is not None and len(batch) < len(sorted_page):
             break
 
     return CollectionResult(
