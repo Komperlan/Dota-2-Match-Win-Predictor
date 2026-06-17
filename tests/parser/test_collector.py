@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
+
 import httpx
 
 from dota_predictor.parser.checkpoint import CheckpointStore
@@ -98,6 +101,38 @@ def test_collect_all_stops_on_empty_page(parser_config: ParserConfig) -> None:
     assert result.written == 3
     assert result.pages == 3
     assert result.last_less_than_match_id == 298
+
+
+def test_collect_stops_at_collection_min_start_time(parser_config: ParserConfig) -> None:
+    config = replace(
+        parser_config,
+        collection_min_start_time=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            json=[
+                public_match_payload(match_id=400, start_time=1_735_689_600),
+                public_match_payload(match_id=399, start_time=1_704_067_200),
+            ],
+        )
+    )
+    client = httpx.Client(transport=transport, base_url=config.source_base_url)
+    source = OpenDotaSource(config, client=client, sleep=lambda _: None)
+
+    result = collect_public_matches(
+        source=source,
+        raw_store=RawPublicMatchStore(config.raw_output_dir, schema_version=1),
+        checkpoint_store=CheckpointStore(config.checkpoint_file),
+        config=config,
+        limit=None,
+    )
+
+    assert result.fetched == 1
+    assert result.written == 1
+    assert result.skipped_by_start_time == 1
+    assert result.stopped_by_start_time is True
+    assert len(list(config.raw_output_dir.rglob("*.json"))) == 1
 
 
 def test_retry_after_429(parser_config: ParserConfig) -> None:

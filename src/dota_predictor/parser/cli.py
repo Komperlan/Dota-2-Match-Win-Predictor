@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from dota_predictor.parser.checkpoint import CheckpointStore
@@ -25,7 +26,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = load_parser_config(args.config)
     if args.command == "collect-public":
-        result = _collect(config, _resolve_limit(args))
+        result = _collect(
+            _resolve_collection_config(config, args.patches, args),
+            _resolve_limit(args),
+        )
         LOGGER.info("Collected public matches: %s", result)
         return 0
 
@@ -35,7 +39,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "parse-public":
-        collection = _collect(config, _resolve_limit(args))
+        collection = _collect(
+            _resolve_collection_config(config, args.patches, args),
+            _resolve_limit(args),
+        )
         normalization = _normalize(config, args.patches)
         LOGGER.info("Collected public matches: %s", collection)
         LOGGER.info("Normalized public matches: %s", normalization)
@@ -88,6 +95,17 @@ def _add_collection_limit_flags(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Keep paginating until OpenDota returns an empty page.",
     )
+    patch_group = parser.add_mutually_exclusive_group()
+    patch_group.add_argument(
+        "--patch-family",
+        help="Collect only matches at or after the start of this numbered patch family, "
+        "for example 7.39 includes 7.39, 7.39b, 7.39c.",
+    )
+    patch_group.add_argument(
+        "--latest-patch-family",
+        action="store_true",
+        help="Use the latest numbered patch family from the patch registry.",
+    )
 
 
 def _resolve_limit(args: argparse.Namespace) -> int | None:
@@ -96,6 +114,30 @@ def _resolve_limit(args: argparse.Namespace) -> int | None:
     if args.limit is None:
         return 100
     return int(args.limit)
+
+
+def _resolve_collection_config(
+    config: ParserConfig,
+    patches_path: Path,
+    args: argparse.Namespace,
+) -> ParserConfig:
+    patch_family = getattr(args, "patch_family", None)
+    latest_patch_family = bool(getattr(args, "latest_patch_family", False))
+    if patch_family is None and not latest_patch_family:
+        return config
+
+    patch_registry = PatchRegistry.from_yaml(patches_path)
+    if latest_patch_family:
+        patch_family = patch_registry.latest_numbered_patch_family()
+        if patch_family is None:
+            msg = "No numbered patch family found in patch registry"
+            raise ValueError(msg)
+
+    family_start = patch_registry.patch_family_start(str(patch_family))
+    if family_start is None:
+        msg = f"Patch family not found in patch registry: {patch_family}"
+        raise ValueError(msg)
+    return replace(config, collection_min_start_time=family_start)
 
 
 def _normalize(config: ParserConfig, patches_path: Path) -> object:

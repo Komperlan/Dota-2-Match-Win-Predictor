@@ -10,6 +10,8 @@ feature engineering пока нет.
 
 - Загрузка публичных матчей из OpenDota `/publicMatches`.
 - Пагинация через `less_than_match_id`.
+- Ограничение сбора по `collection_min_start_time`.
+- Сбор последнего номерного patch family вместе с буквенными подпачами.
 - Optional `OPENDOTA_API_KEY`.
 - Retry/backoff для `429` и `5xx`.
 - Идемпотентное сохранение raw JSON envelopes.
@@ -95,6 +97,18 @@ uv run dota-parser collect-public --limit 100
 uv run dota-parser normalize-public
 ```
 
+Для модели полезнее свежая мета, поэтому основной рабочий сценарий - собрать последний
+номерной патч и все его буквенные подпачи из `configs/patches.yaml`:
+
+```bash
+uv run dota-parser collect-public --all --latest-patch-family
+uv run dota-parser normalize-public
+```
+
+Например, если последний номерной патч в registry - `7.39`, команда соберёт матчи с
+начала `7.39` и захватит `7.39b`, `7.39c` и другие буквенные подпачи, пока они входят в
+тот же patch family.
+
 ## CLI
 
 Глобальные флаги указываются до команды:
@@ -132,6 +146,8 @@ uv run dota-parser collect-public --limit 1000
 | --- | --- | --- |
 | `--limit INT` | `100` | Максимум raw rows обработать за этот запуск. |
 | `--all` | off | Собирать страницы до тех пор, пока OpenDota не вернёт пустую страницу. Нельзя использовать вместе с `--limit`. |
+| `--patch-family PATCH` | off | Остановить сбор, когда parser дойдёт до матчей старше начала указанного номерного семейства, например `7.39`. |
+| `--latest-patch-family` | off | Взять последнее номерное семейство из `configs/patches.yaml`; буквенные подпачи входят автоматически. |
 
 ### `normalize-public`
 
@@ -157,9 +173,43 @@ uv run dota-parser parse-public --limit 1000
 | --- | --- | --- |
 | `--limit INT` | `100` | Сколько raw rows собрать перед normalization. |
 | `--all` | off | Собирать до пустой страницы, затем нормализовать всё собранное. |
+| `--patch-family PATCH` | off | Собирать только матчи с начала указанного номерного семейства. |
+| `--latest-patch-family` | off | Собирать только последнее номерное семейство из patch registry. |
 
 Для очень большого сбора лучше запускать `collect-public --all` отдельно, а
 `normalize-public` уже после завершения или периодически вручную.
+
+## Как спарсить последний patch family
+
+Это рекомендуемый режим для MVP: данные ближе к текущей мете и дешевле по API/диску.
+
+Сначала заполни `configs/patches.yaml` реальными границами последнего номерного патча и
+его буквенных подпачей. Затем:
+
+```bash
+uv run dota-parser collect-public --all --latest-patch-family
+uv run dota-parser normalize-public
+```
+
+Если хочешь явно указать семейство:
+
+```bash
+uv run dota-parser collect-public --all --patch-family 7.39
+uv run dota-parser normalize-public
+```
+
+`--patch-family 7.39` означает: остановиться, когда сбор дошёл до матчей старше начала
+`7.39`. Нормализация всё равно назначит точный `patch_id` по интервалам из
+`configs/patches.yaml`: `7.39`, `7.39b`, `7.39c` и так далее.
+
+Этот режим использует тот же checkpoint:
+
+```text
+artifacts/checkpoints/opendota_public.json
+```
+
+Если меняешь patch family или дату начала, лучше использовать отдельный `checkpoint_file`
+и отдельный `raw_output_dir`, чтобы не смешивать разные сборы.
 
 ## Как спарсить весь OpenDota
 
@@ -225,6 +275,7 @@ export OPENDOTA_API_KEY="your_key"
 | `timeout_seconds` | `20.0` | HTTP timeout. |
 | `min_rank` | `null` | Передаётся в OpenDota как `min_rank`, если задано. |
 | `max_rank` | `null` | Передаётся в OpenDota как `max_rank`, если задано. |
+| `collection_min_start_time` | `null` | ISO datetime cutoff. Collector сохраняет только матчи с `start_time >=` этому значению и останавливается, когда доходит до более старых матчей. |
 | `allowed_game_modes` | `[22]` | Разрешённые режимы. `22` = All Pick. |
 | `allowed_lobby_types` | `[7]` | Разрешённые lobby types. `7` = ranked. |
 | `min_duration_seconds` | `600` | Матчи короче отклоняются. |
@@ -243,8 +294,13 @@ patches:
   - patch_id: "7.39"
     version: "7.39"
     started_at: "2025-05-22T00:00:00Z"
-    ended_at: null
+    ended_at: "2025-06-10T00:00:00Z"
     major: true
+  - patch_id: "7.39b"
+    version: "7.39b"
+    started_at: "2025-06-10T00:00:00Z"
+    ended_at: null
+    major: false
 ```
 
 Правило назначения:
@@ -255,6 +311,15 @@ patch.started_at <= match.start_time < patch.ended_at
 
 Сейчас в репозитории лежит bootstrap interval. Перед реальным обучением его нужно заменить
 на проверенные даты патчей Dota 2.
+
+Patch family - это номерной патч и все буквенные подпачи с тем же префиксом. Например:
+
+```text
+7.39 family = 7.39, 7.39b, 7.39c, 7.39d
+```
+
+`--latest-patch-family` ищет последний `patch_id` формата `N.NN`, например `7.39`, и
+использует начало этого патча как cutoff для сбора.
 
 ## Фильтры качества
 

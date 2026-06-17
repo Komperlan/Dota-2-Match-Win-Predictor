@@ -7,6 +7,7 @@ backoff_max_seconds: 30.0
 timeout_seconds: 20.0
 min_rank: null
 max_rank: null
+collection_min_start_time: null
 allowed_game_modes:
   - 22
 allowed_lobby_types:

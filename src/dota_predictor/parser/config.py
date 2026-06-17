@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ class ParserConfig:
     timeout_seconds: float = 20.0
     min_rank: int | None = None
     max_rank: int | None = None
+    collection_min_start_time: datetime | None = None
     allowed_game_modes: tuple[int, ...] = (22,)
     allowed_lobby_types: tuple[int, ...] = (7,)
     min_duration_seconds: int = 600
@@ -45,6 +47,9 @@ class ParserConfig:
             timeout_seconds=float(values.get("timeout_seconds", cls.timeout_seconds)),
             min_rank=_optional_int(values.get("min_rank")),
             max_rank=_optional_int(values.get("max_rank")),
+            collection_min_start_time=_optional_datetime(
+                values.get("collection_min_start_time")
+            ),
             allowed_game_modes=tuple(
                 int(value) for value in values.get("allowed_game_modes", cls.allowed_game_modes)
             ),
@@ -86,3 +91,15 @@ def _optional_int(value: object) -> int | None:
         return int(value)
     msg = f"Expected int-compatible value, got {type(value).__name__}"
     raise ValueError(msg)
+
+
+def _optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"Expected ISO datetime string or null, got {type(value).__name__}"
+        raise ValueError(msg)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

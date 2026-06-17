@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+NUMBERED_PATCH_RE = re.compile(r"^\d+\.\d+$")
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,22 @@ class PatchRegistry:
                 return patch
         return None
 
+    def latest_numbered_patch_family(self) -> str | None:
+        numbered_patches = [
+            patch for patch in self._patches if NUMBERED_PATCH_RE.fullmatch(patch.patch_id)
+        ]
+        if not numbered_patches:
+            return None
+        return max(numbered_patches, key=lambda patch: patch.started_at).patch_id
+
+    def patch_family_start(self, patch_family: str) -> datetime | None:
+        family_patches = [
+            patch for patch in self._patches if _is_patch_in_family(patch.patch_id, patch_family)
+        ]
+        if not family_patches:
+            return None
+        return min(patch.started_at for patch in family_patches)
+
 
 def _patch_from_mapping(value: Any) -> Patch:
     if not isinstance(value, dict):
@@ -78,3 +97,10 @@ def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _is_patch_in_family(patch_id: str, patch_family: str) -> bool:
+    if patch_id == patch_family:
+        return True
+    suffix = patch_id.removeprefix(patch_family)
+    return patch_id.startswith(patch_family) and suffix.isalpha()
