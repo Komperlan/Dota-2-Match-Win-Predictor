@@ -14,8 +14,12 @@ class ParserConfig:
     public_matches_endpoint: str = "/publicMatches"
     steam_base_url: str = "https://api.steampowered.com"
     steam_match_history_endpoint: str = "/IDOTA2Match_570/GetMatchHistory/v1/"
+    steam_match_history_by_sequence_endpoint: str = (
+        "/IDOTA2Match_570/GetMatchHistoryBySequenceNum/v1/"
+    )
     steam_match_details_endpoint: str = "/IDOTA2Match_570/GetMatchDetails/v1/"
     steam_matches_requested: int = 100
+    steam_details_source: str = "steam_sequence"
     steam_history_game_mode: int | None = 22
     steam_history_min_players: int | None = 10
     request_delay_seconds: float = 1.0
@@ -50,11 +54,20 @@ class ParserConfig:
             steam_match_history_endpoint=str(
                 values.get("steam_match_history_endpoint", cls.steam_match_history_endpoint)
             ),
+            steam_match_history_by_sequence_endpoint=str(
+                values.get(
+                    "steam_match_history_by_sequence_endpoint",
+                    cls.steam_match_history_by_sequence_endpoint,
+                )
+            ),
             steam_match_details_endpoint=str(
                 values.get("steam_match_details_endpoint", cls.steam_match_details_endpoint)
             ),
             steam_matches_requested=int(
                 values.get("steam_matches_requested", cls.steam_matches_requested)
+            ),
+            steam_details_source=str(
+                values.get("steam_details_source", cls.steam_details_source)
             ),
             steam_history_game_mode=_optional_int(
                 values.get("steam_history_game_mode", cls.steam_history_game_mode)

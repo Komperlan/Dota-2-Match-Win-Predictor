@@ -9,8 +9,10 @@ feature engineering пока нет.
 ## Что уже реализовано
 
 - Загрузка публичных матчей из OpenDota `/publicMatches`.
-- Загрузка матчей через Valve Steam Web API:
-  `GetMatchHistory` -> `GetMatchDetails`.
+- Загрузка свежих match ids через Valve Steam Web API `GetMatchHistory`.
+- Загрузка Steam-only details через Valve `GetMatchHistoryBySequenceNum`, чтобы не
+  использовать OpenDota для `collect-steam` и не упираться в массовые `500` от
+  `GetMatchDetails`.
 - Пагинация через `less_than_match_id`.
 - Ограничение сбора по `collection_min_start_time`.
 - Сбор последнего номерного patch family вместе с буквенными подпачами.
@@ -111,16 +113,16 @@ uv run dota-parser parse-steam --limit 100
 Не публикуй Steam/OpenDota API keys в чатах, логах и git. Если ключ случайно засветился,
 лучше перевыпустить его.
 
-Основной рекомендуемый источник для следующей итерации - Steam Web API: он ближе к
-первичным данным Valve. OpenDota остаётся полезным как быстрый публичный источник и
-резервная проверка.
+Основной рекомендуемый сценарий для следующей итерации - Steam history как индекс свежих
+матчей и Steam sequence details как рабочий источник полей матча. Это обходит ситуацию,
+когда Valve `GetMatchDetails` массово возвращает `500` на свежие match ids.
 
 ## Источники данных
 
 | Источник | Команды | Нужен ключ | Что сохраняем | Когда использовать |
 | --- | --- | --- | --- | --- |
 | OpenDota | `collect-public`, `normalize-public`, `parse-public` | Нет, но можно `OPENDOTA_API_KEY` | Raw rows из `/publicMatches` | Быстрый старт, публичная проверка, малые выборки. |
-| Valve Steam Web API | `collect-steam`, `normalize-steam`, `parse-steam` | Да, `STEAM_WEB_API_KEY` | Raw responses из `GetMatchDetails` | Основной сбор для модели по свежему patch family. |
+| Steam history + sequence details | `collect-steam`, `normalize-steam`, `parse-steam` | Да, `STEAM_WEB_API_KEY` | Raw match objects из `GetMatchHistoryBySequenceNum` по match ids из Steam history | Основной сбор для модели по свежему patch family. |
 
 Оба источника приводятся к одной внутренней схеме `MatchRecord`, но пишутся в разные
 raw/normalized директории, чтобы не смешивать происхождение данных.
@@ -167,6 +169,11 @@ uv run dota-parser [GLOBAL_FLAGS] <command> [COMMAND_FLAGS]
 uv run dota-parser --config configs/parser.yaml --log-level DEBUG collect-public --limit 500
 ```
 
+На `INFO` parser пишет старт run, страницы history/public matches, progress по details,
+checkpoint counters и итог normalization. На `DEBUG` дополнительно видно, какой `match_id`
+сейчас забирается и из какого detail source. Логи `httpx/httpcore` приглушены, чтобы не
+светить URL с API keys.
+
 ### `collect-public`
 
 Скачивает raw строки из OpenDota `/publicMatches` и сохраняет их в
@@ -197,11 +204,13 @@ uv run dota-parser normalize-public
 
 ### `collect-steam`
 
-Скачивает матчи через Valve Steam Web API. Поток отличается от OpenDota:
+Скачивает match ids через Valve Steam Web API, а details берёт из `steam_details_source`.
+По умолчанию `steam_details_source: "steam_sequence"`: parser вызывает
+`GetMatchHistoryBySequenceNum` по `match_seq_num` каждого матча из history.
 
 1. `GetMatchHistory` возвращает страницу match ids и игроков.
-2. Для каждого match id parser вызывает `GetMatchDetails`.
-3. Raw response из `GetMatchDetails` сохраняется в
+2. Для каждого match id parser вызывает `GetMatchHistoryBySequenceNum`.
+3. Raw response из detail source сохраняется в
    `data/raw/steam/match_details/YYYY/MM/<match_id>.json`.
 
 ```bash
@@ -210,12 +219,12 @@ uv run dota-parser collect-steam --limit 100
 ```
 
 Steam collector делает минимум два типа запросов: одну страницу `GetMatchHistory`, затем
-по одному `GetMatchDetails` на каждый матч из выбранной страницы. Поэтому полный сбор
-через Steam API заметно дороже по числу запросов, чем OpenDota `/publicMatches`.
+по одному detail-запросу на каждый матч из выбранной страницы. Поэтому полный сбор
+заметно дороже по числу запросов, чем OpenDota `/publicMatches`.
 
-Steam API иногда отвечает `5xx` на конкретный `GetMatchDetails`. Parser повторяет запрос
-по retry/backoff, а после исчерпания retry пропускает только этот `match_id` и продолжает
-сбор. Такие пропуски видны в `failed` counter в итоговом логе и checkpoint.
+Если выставить `steam_details_source: "steam_details"`, parser будет использовать Valve
+`GetMatchDetails`; при `5xx` он не делает долгий retry loop, а пропускает только этот
+`match_id`.
 
 Флаги такие же, как у `collect-public`:
 
@@ -228,7 +237,7 @@ Steam API иногда отвечает `5xx` на конкретный `GetMatc
 
 ### `normalize-steam`
 
-Читает raw Steam `GetMatchDetails` envelopes, фильтрует и пишет normalized Parquet в
+Читает raw detail envelopes из `steam_raw_output_dir`, фильтрует и пишет normalized Parquet в
 `data/normalized/steam_matches`.
 
 ```bash
@@ -372,7 +381,7 @@ uv run dota-parser collect-steam --all
 uv run dota-parser normalize-steam
 ```
 
-Практически для MVP это не рекомендуется: `GetMatchDetails` вызывается на каждый матч, а
+Практически для MVP это не рекомендуется: detail-запрос выполняется на каждый матч, а
 старые патчи хуже отражают текущую мету. Лучше собирать последний номерной patch family.
 
 ## Конфигурация parser
@@ -385,8 +394,10 @@ uv run dota-parser normalize-steam
 | `public_matches_endpoint` | `/publicMatches` | Endpoint публичных матчей. |
 | `steam_base_url` | `https://api.steampowered.com` | Base URL Valve Steam Web API. |
 | `steam_match_history_endpoint` | `/IDOTA2Match_570/GetMatchHistory/v1/` | Endpoint для страниц match history. |
+| `steam_match_history_by_sequence_endpoint` | `/IDOTA2Match_570/GetMatchHistoryBySequenceNum/v1/` | Endpoint для Steam sequence details. |
 | `steam_match_details_endpoint` | `/IDOTA2Match_570/GetMatchDetails/v1/` | Endpoint для подробностей матча. |
 | `steam_matches_requested` | `100` | Сколько history rows просить у `GetMatchHistory` за страницу. |
+| `steam_details_source` | `steam_sequence` | Откуда брать details для `collect-steam`: `steam_sequence` или `steam_details`. |
 | `steam_history_game_mode` | `22` | Фильтр `game_mode` для Steam history. `22` = Ranked All Pick. |
 | `steam_history_min_players` | `10` | Фильтр `min_players` для Steam history. |
 | `request_delay_seconds` | `1.0` | Пауза после успешного запроса. |
@@ -401,7 +412,7 @@ uv run dota-parser normalize-steam
 | `allowed_lobby_types` | `[7]` | Разрешённые lobby types. `7` = ranked. |
 | `min_duration_seconds` | `600` | Матчи короче отклоняются. |
 | `raw_output_dir` | `data/raw/opendota/public_matches` | Куда писать raw envelopes. |
-| `steam_raw_output_dir` | `data/raw/steam/match_details` | Куда писать raw Steam `GetMatchDetails` envelopes. |
+| `steam_raw_output_dir` | `data/raw/steam/match_details` | Куда писать raw detail envelopes для `collect-steam`. |
 | `normalized_output_dir` | `data/normalized/matches` | Куда писать Parquet. |
 | `steam_normalized_output_dir` | `data/normalized/steam_matches` | Куда писать normalized Steam Parquet. |
 | `checkpoint_file` | `artifacts/checkpoints/opendota_public.json` | Resume checkpoint. |
@@ -509,7 +520,6 @@ python -m mypy src
 
 ## Что пока не реализовано
 
-- OpenDota детальный `/matches/{match_id}` parser.
 - Hero registry.
 - Реальные признаки для ML.
 - Обучение моделей.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,8 @@ from dota_predictor.parser.parquet_store import ParquetMatchWriter
 from dota_predictor.parser.patches import PatchRegistry
 from dota_predictor.parser.quality import QualityIssue, QualityIssueWriter, make_issue
 from dota_predictor.parser.raw_store import RawEnvelope, RawPublicMatchStore
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ def normalize_public_matches(
     rejected = 0
     issue_count = 0
 
+    LOGGER.info("Starting OpenDota normalization raw_dir=%s", raw_store.root)
     for envelope in raw_store.iter_envelopes():
         raw_seen += 1
         record, issues = normalize_public_match(
@@ -50,8 +54,23 @@ def normalize_public_matches(
             rejected += 1
         else:
             records.append(record)
+        if raw_seen % 1000 == 0:
+            LOGGER.info(
+                "OpenDota normalization progress raw_seen=%s accepted=%s rejected=%s issues=%s",
+                raw_seen,
+                len(records),
+                rejected,
+                issue_count,
+            )
 
     normalized = parquet_writer.write(records)
+    LOGGER.info(
+        "OpenDota normalization complete raw_seen=%s normalized=%s rejected=%s issues=%s",
+        raw_seen,
+        normalized,
+        rejected,
+        issue_count,
+    )
     return NormalizationResult(
         raw_seen=raw_seen,
         normalized=normalized,
@@ -73,6 +92,7 @@ def normalize_steam_matches(
     rejected = 0
     issue_count = 0
 
+    LOGGER.info("Starting Steam normalization raw_dir=%s", raw_store.root)
     for envelope in raw_store.iter_envelopes():
         raw_seen += 1
         record, issues = normalize_steam_match_details(
@@ -86,8 +106,23 @@ def normalize_steam_matches(
             rejected += 1
         else:
             records.append(record)
+        if raw_seen % 1000 == 0:
+            LOGGER.info(
+                "Steam normalization progress raw_seen=%s accepted=%s rejected=%s issues=%s",
+                raw_seen,
+                len(records),
+                rejected,
+                issue_count,
+            )
 
     normalized = parquet_writer.write(records)
+    LOGGER.info(
+        "Steam normalization complete raw_seen=%s normalized=%s rejected=%s issues=%s",
+        raw_seen,
+        normalized,
+        rejected,
+        issue_count,
+    )
     return NormalizationResult(
         raw_seen=raw_seen,
         normalized=normalized,

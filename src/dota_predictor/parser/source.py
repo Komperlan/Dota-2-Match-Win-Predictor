@@ -146,6 +146,10 @@ class SteamWebApiSource:
         return self.config.steam_match_history_endpoint
 
     @property
+    def match_history_by_sequence_endpoint(self) -> str:
+        return self.config.steam_match_history_by_sequence_endpoint
+
+    @property
     def match_details_endpoint(self) -> str:
         return self.config.steam_match_details_endpoint
 
@@ -173,12 +177,40 @@ class SteamWebApiSource:
             raise ValueError(msg)
         return result
 
+    def fetch_match_history_by_sequence(
+        self,
+        *,
+        start_at_match_seq_num: int,
+        matches_requested: int = 1,
+    ) -> dict[str, Any]:
+        params: dict[str, int | str] = {
+            "key": self._api_key or "",
+            "start_at_match_seq_num": start_at_match_seq_num,
+            "matches_requested": matches_requested,
+        }
+        response = self._request(
+            "GET",
+            self.match_history_by_sequence_endpoint,
+            params=params,
+        )
+        payload = _ensure_mapping(response.json())
+        result = _ensure_mapping(payload.get("result"))
+        if int(result.get("status", 0)) != 1:
+            msg = f"Steam GetMatchHistoryBySequenceNum returned status={result.get('status')}"
+            raise ValueError(msg)
+        return result
+
     def fetch_match_details(self, *, match_id: int) -> dict[str, Any]:
         params: dict[str, int | str] = {
             "key": self._api_key or "",
             "match_id": match_id,
         }
-        response = self._request("GET", self.match_details_endpoint, params=params)
+        response = self._request(
+            "GET",
+            self.match_details_endpoint,
+            params=params,
+            retry_server_errors=False,
+        )
         return _ensure_mapping(response.json())
 
     def _request(
@@ -187,11 +219,15 @@ class SteamWebApiSource:
         url: str,
         *,
         params: dict[str, int | str],
+        retry_server_errors: bool = True,
     ) -> httpx.Response:
         attempt = 0
         while True:
             response = self._client.request(method, url, params=params)
-            if not _is_retryable(response.status_code):
+            if not _is_retryable(
+                response.status_code,
+                retry_server_errors=retry_server_errors,
+            ):
                 response.raise_for_status()
                 self._sleep_after_success()
                 return response
@@ -218,8 +254,10 @@ class SteamWebApiSource:
             self._sleep(self.config.request_delay_seconds)
 
 
-def _is_retryable(status_code: int) -> bool:
-    return status_code == 429 or 500 <= status_code <= 599
+def _is_retryable(status_code: int, *, retry_server_errors: bool = True) -> bool:
+    return status_code == 429 or (
+        retry_server_errors and 500 <= status_code <= 599
+    )
 
 
 def _retry_delay(

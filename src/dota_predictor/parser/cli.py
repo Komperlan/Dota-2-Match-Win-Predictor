@@ -129,6 +129,7 @@ def _collect_steam(config: ParserConfig, limit: int | None) -> object:
     with SteamWebApiSource(config) as source:
         return collect_steam_matches(
             source=source,
+            details_source=config.steam_details_source,
             raw_store=raw_store,
             checkpoint_store=checkpoint_store,
             config=config,
