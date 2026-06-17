@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 import httpx
 
 from dota_predictor.parser.checkpoint import CheckpointStore
-from dota_predictor.parser.collector import collect_public_matches
+from dota_predictor.parser.collector import collect_public_matches, collect_steam_matches
 from dota_predictor.parser.config import ParserConfig
 from dota_predictor.parser.raw_store import RawPublicMatchStore
-from dota_predictor.parser.source import OpenDotaSource
+from dota_predictor.parser.source import OpenDotaSource, SteamWebApiSource
 
-from .conftest import public_match_payload
+from .conftest import public_match_payload, steam_match_details_payload, steam_match_history_payload
 
 
 def test_collect_single_page(parser_config: ParserConfig) -> None:
@@ -178,3 +178,55 @@ def test_retry_limit_for_5xx(parser_config: ParserConfig) -> None:
         assert exc.response.status_code == 500
     else:
         raise AssertionError("Expected HTTPStatusError")
+
+
+def test_collect_steam_fetches_history_then_details(parser_config: ParserConfig) -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path.endswith("/GetMatchHistory/v1/"):
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "status": 1,
+                        "num_results": 2,
+                        "results_remaining": 0,
+                        "matches": [
+                            steam_match_history_payload(match_id=900),
+                            steam_match_history_payload(match_id=899),
+                        ],
+                    }
+                },
+            )
+        match_id = int(request.url.params["match_id"])
+        return httpx.Response(200, json=steam_match_details_payload(match_id=match_id))
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url=parser_config.steam_base_url,
+    )
+    source = SteamWebApiSource(
+        parser_config,
+        client=client,
+        sleep=lambda _: None,
+        api_key="test-key",
+    )
+    raw_store = RawPublicMatchStore(parser_config.steam_raw_output_dir, schema_version=1)
+    checkpoint_store = CheckpointStore(parser_config.steam_checkpoint_file)
+
+    result = collect_steam_matches(
+        source=source,
+        raw_store=raw_store,
+        checkpoint_store=checkpoint_store,
+        config=parser_config,
+        limit=2,
+    )
+
+    assert result.fetched == 2
+    assert result.written == 2
+    assert result.last_less_than_match_id == 898
+    assert requested_paths.count("/IDOTA2Match_570/GetMatchHistory/v1/") == 1
+    assert requested_paths.count("/IDOTA2Match_570/GetMatchDetails/v1/") == 2
+    assert len(list(parser_config.steam_raw_output_dir.rglob("*.json"))) == 2

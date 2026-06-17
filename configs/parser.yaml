@@ -1,5 +1,11 @@
 source_base_url: "https://api.opendota.com/api"
 public_matches_endpoint: "/publicMatches"
+steam_base_url: "https://api.steampowered.com"
+steam_match_history_endpoint: "/IDOTA2Match_570/GetMatchHistory/v1/"
+steam_match_details_endpoint: "/IDOTA2Match_570/GetMatchDetails/v1/"
+steam_matches_requested: 100
+steam_history_game_mode: 22
+steam_history_min_players: 10
 request_delay_seconds: 1.0
 max_retries: 5
 backoff_initial_seconds: 1.0
@@ -14,7 +20,11 @@ allowed_lobby_types:
   - 7
 min_duration_seconds: 600
 raw_output_dir: "data/raw/opendota/public_matches"
+steam_raw_output_dir: "data/raw/steam/match_details"
 normalized_output_dir: "data/normalized/matches"
+steam_normalized_output_dir: "data/normalized/steam_matches"
 checkpoint_file: "artifacts/checkpoints/opendota_public.json"
+steam_checkpoint_file: "artifacts/checkpoints/steam_match_history.json"
 quality_issues_file: "artifacts/quality/public_matches_issues.jsonl"
+steam_quality_issues_file: "artifacts/quality/steam_match_details_issues.jsonl"
 schema_version: 1

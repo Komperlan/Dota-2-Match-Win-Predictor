@@ -3,13 +3,22 @@ from __future__ import annotations
 import json
 
 from dota_predictor.parser.config import ParserConfig
-from dota_predictor.parser.normalizer import normalize_public_match, normalize_public_matches
+from dota_predictor.parser.normalizer import (
+    normalize_public_match,
+    normalize_public_matches,
+    normalize_steam_match_details,
+)
 from dota_predictor.parser.parquet_store import ParquetMatchWriter
 from dota_predictor.parser.patches import PatchRegistry
 from dota_predictor.parser.quality import QualityIssueWriter
 from dota_predictor.parser.raw_store import RawPublicMatchStore
 
-from .conftest import public_match_payload, raw_envelope
+from .conftest import (
+    public_match_payload,
+    raw_envelope,
+    steam_match_details_payload,
+    steam_raw_envelope,
+)
 
 
 def test_valid_public_match_normalizes_to_match_record(
@@ -130,3 +139,39 @@ def test_normalization_writes_quality_issue_jsonl(
     assert result.rejected == 1
     assert len(lines) == 1
     assert json.loads(lines[0])["issue_type"] == "unknown_patch"
+
+
+def test_valid_steam_match_details_normalizes_to_match_record(
+    parser_config: ParserConfig,
+    patch_registry: PatchRegistry,
+) -> None:
+    payload = steam_match_details_payload(
+        result_extra="ignored",
+        players=[
+            {"account_id": 1, "player_slot": 2, "hero_id": 3, "leaver_status": 0},
+            {"account_id": 2, "player_slot": 0, "hero_id": 1, "leaver_status": 0},
+            {"account_id": 3, "player_slot": 4, "hero_id": 5, "leaver_status": 0},
+            {"account_id": 4, "player_slot": 1, "hero_id": 2, "leaver_status": 0},
+            {"account_id": 5, "player_slot": 3, "hero_id": 4, "leaver_status": 0},
+            {"account_id": 6, "player_slot": 132, "hero_id": 10, "leaver_status": 0},
+            {"account_id": 7, "player_slot": 128, "hero_id": 6, "leaver_status": 0},
+            {"account_id": 8, "player_slot": 131, "hero_id": 9, "leaver_status": 0},
+            {"account_id": 9, "player_slot": 129, "hero_id": 7, "leaver_status": 0},
+            {"account_id": 10, "player_slot": 130, "hero_id": 8, "leaver_status": 3},
+        ],
+    )
+
+    record, issues = normalize_steam_match_details(
+        steam_raw_envelope(payload),
+        patch_registry=patch_registry,
+        config=parser_config,
+    )
+
+    assert issues == []
+    assert record is not None
+    assert record.source == "steam"
+    assert record.radiant_heroes == (1, 2, 3, 4, 5)
+    assert record.dire_heroes == (6, 7, 8, 9, 10)
+    assert record.radiant_win is True
+    assert record.avg_rank_tier is None
+    assert record.has_leaver is True

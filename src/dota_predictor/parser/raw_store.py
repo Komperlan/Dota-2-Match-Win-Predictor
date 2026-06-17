@@ -78,10 +78,18 @@ class RawPublicMatchStore:
             )
 
     def _path_for_payload(self, payload: dict[str, Any], fallback_timestamp: datetime) -> Path:
-        match_id = int(payload["match_id"])
-        start_time = payload.get("start_time")
+        match_payload = _match_payload(payload)
+        match_id = int(match_payload["match_id"])
+        start_time = match_payload.get("start_time")
         if isinstance(start_time, int):
             match_timestamp = unix_seconds_to_utc(start_time)
         else:
             match_timestamp = fallback_timestamp
         return self.root / f"{match_timestamp:%Y}" / f"{match_timestamp:%m}" / f"{match_id}.json"
+
+
+def _match_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result")
+    if isinstance(result, dict) and "match_id" in result:
+        return result
+    return payload

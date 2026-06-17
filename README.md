@@ -9,6 +9,8 @@ feature engineering пока нет.
 ## Что уже реализовано
 
 - Загрузка публичных матчей из OpenDota `/publicMatches`.
+- Загрузка матчей через Valve Steam Web API:
+  `GetMatchHistory` -> `GetMatchDetails`.
 - Пагинация через `less_than_match_id`.
 - Ограничение сбора по `collection_min_start_time`.
 - Сбор последнего номерного patch family вместе с буквенными подпачами.
@@ -47,7 +49,9 @@ Generated data не коммитится:
 
 ```text
 data/raw/opendota/public_matches/
+data/raw/steam/match_details/
 data/normalized/matches/
+data/normalized/steam_matches/
 artifacts/checkpoints/
 artifacts/quality/
 ```
@@ -97,12 +101,27 @@ uv run dota-parser collect-public --limit 100
 uv run dota-parser normalize-public
 ```
 
+Valve Steam Web API требует ключ:
+
+```bash
+export STEAM_WEB_API_KEY="your_key"
+uv run dota-parser parse-steam --limit 100
+```
+
 Для модели полезнее свежая мета, поэтому основной рабочий сценарий - собрать последний
 номерной патч и все его буквенные подпачи из `configs/patches.yaml`:
 
 ```bash
 uv run dota-parser collect-public --all --latest-patch-family
 uv run dota-parser normalize-public
+```
+
+Через Valve Steam Web API тот же сценарий:
+
+```bash
+export STEAM_WEB_API_KEY="your_key"
+uv run dota-parser collect-steam --all --latest-patch-family
+uv run dota-parser normalize-steam
 ```
 
 Например, если последний номерной патч в registry - `7.39`, команда соберёт матчи с
@@ -159,6 +178,47 @@ uv run dota-parser normalize-public
 
 Командных флагов нет. Использует `--config` и `--patches`.
 
+### `collect-steam`
+
+Скачивает матчи через Valve Steam Web API. Поток отличается от OpenDota:
+
+1. `GetMatchHistory` возвращает страницу match ids и игроков.
+2. Для каждого match id parser вызывает `GetMatchDetails`.
+3. Raw response из `GetMatchDetails` сохраняется в
+   `data/raw/steam/match_details/YYYY/MM/<match_id>.json`.
+
+```bash
+export STEAM_WEB_API_KEY="your_key"
+uv run dota-parser collect-steam --limit 100
+```
+
+Флаги такие же, как у `collect-public`:
+
+| Флаг | Default | Что делает |
+| --- | --- | --- |
+| `--limit INT` | `100` | Сколько match details сохранить за этот запуск. |
+| `--all` | off | Идти по истории до пустого ответа, окончания query или patch cutoff. |
+| `--patch-family PATCH` | off | Собирать только матчи с начала указанного номерного семейства. |
+| `--latest-patch-family` | off | Собирать только последнее номерное семейство из patch registry. |
+
+### `normalize-steam`
+
+Читает raw Steam `GetMatchDetails` envelopes, фильтрует и пишет normalized Parquet в
+`data/normalized/steam_matches`.
+
+```bash
+uv run dota-parser normalize-steam
+```
+
+### `parse-steam`
+
+Shortcut: сначала `collect-steam`, затем `normalize-steam`.
+
+```bash
+export STEAM_WEB_API_KEY="your_key"
+uv run dota-parser parse-steam --limit 100
+```
+
 ### `parse-public`
 
 Shortcut: сначала `collect-public`, затем `normalize-public`.
@@ -198,6 +258,14 @@ uv run dota-parser collect-public --all --patch-family 7.39
 uv run dota-parser normalize-public
 ```
 
+Для Valve Steam Web API:
+
+```bash
+export STEAM_WEB_API_KEY="your_key"
+uv run dota-parser collect-steam --all --patch-family 7.39
+uv run dota-parser normalize-steam
+```
+
 `--patch-family 7.39` означает: остановиться, когда сбор дошёл до матчей старше начала
 `7.39`. Нормализация всё равно назначит точный `patch_id` по интервалам из
 `configs/patches.yaml`: `7.39`, `7.39b`, `7.39c` и так далее.
@@ -209,7 +277,8 @@ artifacts/checkpoints/opendota_public.json
 ```
 
 Если меняешь patch family или дату начала, лучше использовать отдельный `checkpoint_file`
-и отдельный `raw_output_dir`, чтобы не смешивать разные сборы.
+и отдельный `raw_output_dir`, чтобы не смешивать разные сборы. Для Steam используются
+отдельные настройки `steam_checkpoint_file` и `steam_raw_output_dir`.
 
 ## Как спарсить весь OpenDota
 
@@ -268,6 +337,12 @@ export OPENDOTA_API_KEY="your_key"
 | --- | --- | --- |
 | `source_base_url` | `https://api.opendota.com/api` | Base URL OpenDota API. |
 | `public_matches_endpoint` | `/publicMatches` | Endpoint публичных матчей. |
+| `steam_base_url` | `https://api.steampowered.com` | Base URL Valve Steam Web API. |
+| `steam_match_history_endpoint` | `/IDOTA2Match_570/GetMatchHistory/v1/` | Endpoint для страниц match history. |
+| `steam_match_details_endpoint` | `/IDOTA2Match_570/GetMatchDetails/v1/` | Endpoint для подробностей матча. |
+| `steam_matches_requested` | `100` | Сколько history rows просить у `GetMatchHistory` за страницу. |
+| `steam_history_game_mode` | `22` | Фильтр `game_mode` для Steam history. `22` = Ranked Matchmaking. |
+| `steam_history_min_players` | `10` | Фильтр `min_players` для Steam history. |
 | `request_delay_seconds` | `1.0` | Пауза после успешного запроса. |
 | `max_retries` | `5` | Максимум повторов для retryable ошибок. |
 | `backoff_initial_seconds` | `1.0` | Начальная задержка exponential backoff. |
@@ -280,9 +355,13 @@ export OPENDOTA_API_KEY="your_key"
 | `allowed_lobby_types` | `[7]` | Разрешённые lobby types. `7` = ranked. |
 | `min_duration_seconds` | `600` | Матчи короче отклоняются. |
 | `raw_output_dir` | `data/raw/opendota/public_matches` | Куда писать raw envelopes. |
+| `steam_raw_output_dir` | `data/raw/steam/match_details` | Куда писать raw Steam `GetMatchDetails` envelopes. |
 | `normalized_output_dir` | `data/normalized/matches` | Куда писать Parquet. |
+| `steam_normalized_output_dir` | `data/normalized/steam_matches` | Куда писать normalized Steam Parquet. |
 | `checkpoint_file` | `artifacts/checkpoints/opendota_public.json` | Resume checkpoint. |
+| `steam_checkpoint_file` | `artifacts/checkpoints/steam_match_history.json` | Resume checkpoint для Steam history. |
 | `quality_issues_file` | `artifacts/quality/public_matches_issues.jsonl` | Журнал отклонённых матчей. |
+| `steam_quality_issues_file` | `artifacts/quality/steam_match_details_issues.jsonl` | Журнал отклонённых Steam матчей. |
 | `schema_version` | `1` | Версия raw/normalized схемы. |
 
 ## Patch registry
@@ -360,7 +439,7 @@ python -m mypy src
 
 ## Что пока не реализовано
 
-- Детальный `/matches/{match_id}` parser.
+- OpenDota детальный `/matches/{match_id}` parser.
 - Hero registry.
 - Реальные признаки для ML.
 - Обучение моделей.

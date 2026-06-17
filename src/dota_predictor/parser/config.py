@@ -12,6 +12,12 @@ import yaml
 class ParserConfig:
     source_base_url: str = "https://api.opendota.com/api"
     public_matches_endpoint: str = "/publicMatches"
+    steam_base_url: str = "https://api.steampowered.com"
+    steam_match_history_endpoint: str = "/IDOTA2Match_570/GetMatchHistory/v1/"
+    steam_match_details_endpoint: str = "/IDOTA2Match_570/GetMatchDetails/v1/"
+    steam_matches_requested: int = 100
+    steam_history_game_mode: int | None = 22
+    steam_history_min_players: int | None = 10
     request_delay_seconds: float = 1.0
     max_retries: int = 5
     backoff_initial_seconds: float = 1.0
@@ -24,9 +30,13 @@ class ParserConfig:
     allowed_lobby_types: tuple[int, ...] = (7,)
     min_duration_seconds: int = 600
     raw_output_dir: Path = Path("data/raw/opendota/public_matches")
+    steam_raw_output_dir: Path = Path("data/raw/steam/match_details")
     normalized_output_dir: Path = Path("data/normalized/matches")
+    steam_normalized_output_dir: Path = Path("data/normalized/steam_matches")
     checkpoint_file: Path = Path("artifacts/checkpoints/opendota_public.json")
+    steam_checkpoint_file: Path = Path("artifacts/checkpoints/steam_match_history.json")
     quality_issues_file: Path = Path("artifacts/quality/public_matches_issues.jsonl")
+    steam_quality_issues_file: Path = Path("artifacts/quality/steam_match_details_issues.jsonl")
     schema_version: int = 1
 
     @classmethod
@@ -35,6 +45,22 @@ class ParserConfig:
             source_base_url=str(values.get("source_base_url", cls.source_base_url)),
             public_matches_endpoint=str(
                 values.get("public_matches_endpoint", cls.public_matches_endpoint)
+            ),
+            steam_base_url=str(values.get("steam_base_url", cls.steam_base_url)),
+            steam_match_history_endpoint=str(
+                values.get("steam_match_history_endpoint", cls.steam_match_history_endpoint)
+            ),
+            steam_match_details_endpoint=str(
+                values.get("steam_match_details_endpoint", cls.steam_match_details_endpoint)
+            ),
+            steam_matches_requested=int(
+                values.get("steam_matches_requested", cls.steam_matches_requested)
+            ),
+            steam_history_game_mode=_optional_int(
+                values.get("steam_history_game_mode", cls.steam_history_game_mode)
+            ),
+            steam_history_min_players=_optional_int(
+                values.get("steam_history_min_players", cls.steam_history_min_players)
             ),
             request_delay_seconds=float(
                 values.get("request_delay_seconds", cls.request_delay_seconds)
@@ -60,12 +86,24 @@ class ParserConfig:
                 values.get("min_duration_seconds", cls.min_duration_seconds)
             ),
             raw_output_dir=Path(values.get("raw_output_dir", cls.raw_output_dir)),
+            steam_raw_output_dir=Path(
+                values.get("steam_raw_output_dir", cls.steam_raw_output_dir)
+            ),
             normalized_output_dir=Path(
                 values.get("normalized_output_dir", cls.normalized_output_dir)
             ),
+            steam_normalized_output_dir=Path(
+                values.get("steam_normalized_output_dir", cls.steam_normalized_output_dir)
+            ),
             checkpoint_file=Path(values.get("checkpoint_file", cls.checkpoint_file)),
+            steam_checkpoint_file=Path(
+                values.get("steam_checkpoint_file", cls.steam_checkpoint_file)
+            ),
             quality_issues_file=Path(
                 values.get("quality_issues_file", cls.quality_issues_file)
+            ),
+            steam_quality_issues_file=Path(
+                values.get("steam_quality_issues_file", cls.steam_quality_issues_file)
             ),
             schema_version=int(values.get("schema_version", cls.schema_version)),
         )

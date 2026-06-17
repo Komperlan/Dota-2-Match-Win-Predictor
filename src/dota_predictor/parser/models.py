@@ -39,6 +39,60 @@ class RawPublicMatch:
 
 
 @dataclass(frozen=True)
+class RawSteamMatchDetails:
+    match_id: int
+    match_seq_num: int | None
+    radiant_win: bool | None
+    start_time: int
+    duration: int | None
+    lobby_type: int | None
+    game_mode: int | None
+    cluster: int | None
+    players: tuple[dict[str, Any], ...]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> RawSteamMatchDetails:
+        result = payload.get("result", payload)
+        if not isinstance(result, dict):
+            msg = "Steam match details payload must contain a result object"
+            raise ValueError(msg)
+        players = result.get("players")
+        if not isinstance(players, list | tuple):
+            msg = "Steam match details result.players must be a list"
+            raise ValueError(msg)
+        return cls(
+            match_id=int(result["match_id"]),
+            match_seq_num=_optional_int(result.get("match_seq_num")),
+            radiant_win=_optional_bool(result.get("radiant_win")),
+            start_time=int(result["start_time"]),
+            duration=_optional_int(result.get("duration")),
+            lobby_type=_optional_int(result.get("lobby_type")),
+            game_mode=_optional_int(result.get("game_mode")),
+            cluster=_optional_int(result.get("cluster")),
+            players=tuple(_player_mapping(player) for player in players),
+        )
+
+    @property
+    def radiant_team(self) -> tuple[int, ...]:
+        return _team_from_player_slots(self.players, is_dire=False)
+
+    @property
+    def dire_team(self) -> tuple[int, ...]:
+        return _team_from_player_slots(self.players, is_dire=True)
+
+    @property
+    def has_leaver(self) -> bool | None:
+        leaver_statuses = [
+            int(player["leaver_status"])
+            for player in self.players
+            if player.get("leaver_status") is not None
+        ]
+        if not leaver_statuses:
+            return None
+        return any(status in {2, 3, 4, 6} for status in leaver_statuses)
+
+
+@dataclass(frozen=True)
 class MatchRecord:
     match_id: int
     source: str
@@ -113,3 +167,24 @@ def _team_tuple(value: object) -> tuple[int, ...]:
         msg = "Team field must be a list"
         raise ValueError(msg)
     return tuple(int(hero_id) for hero_id in value)
+
+
+def _player_mapping(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        msg = "Player entry must be an object"
+        raise ValueError(msg)
+    return value
+
+
+def _team_from_player_slots(
+    players: tuple[dict[str, Any], ...],
+    *,
+    is_dire: bool,
+) -> tuple[int, ...]:
+    team_players: list[tuple[int, int]] = []
+    for player in players:
+        player_slot = int(player["player_slot"])
+        player_is_dire = bool(player_slot & 128)
+        if player_is_dire == is_dire:
+            team_players.append((player_slot & 7, int(player["hero_id"])))
+    return tuple(hero_id for _slot, hero_id in sorted(team_players))

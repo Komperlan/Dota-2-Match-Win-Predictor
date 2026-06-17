@@ -7,14 +7,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from dota_predictor.parser.checkpoint import CheckpointStore
-from dota_predictor.parser.collector import collect_public_matches
+from dota_predictor.parser.collector import collect_public_matches, collect_steam_matches
 from dota_predictor.parser.config import ParserConfig, load_parser_config
-from dota_predictor.parser.normalizer import normalize_public_matches
+from dota_predictor.parser.normalizer import normalize_public_matches, normalize_steam_matches
 from dota_predictor.parser.parquet_store import ParquetMatchWriter
 from dota_predictor.parser.patches import PatchRegistry
 from dota_predictor.parser.quality import QualityIssueWriter
 from dota_predictor.parser.raw_store import RawPublicMatchStore
-from dota_predictor.parser.source import OpenDotaSource
+from dota_predictor.parser.source import OpenDotaSource, SteamWebApiSource
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = load_parser_config(args.config)
     if args.command == "collect-public":
-        result = _collect(
+        result = _collect_opendota(
             _resolve_collection_config(config, args.patches, args),
             _resolve_limit(args),
         )
@@ -34,18 +34,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "normalize-public":
-        result = _normalize(config, args.patches)
+        result = _normalize_opendota(config, args.patches)
         LOGGER.info("Normalized public matches: %s", result)
         return 0
 
     if args.command == "parse-public":
-        collection = _collect(
+        collection = _collect_opendota(
             _resolve_collection_config(config, args.patches, args),
             _resolve_limit(args),
         )
-        normalization = _normalize(config, args.patches)
+        normalization = _normalize_opendota(config, args.patches)
         LOGGER.info("Collected public matches: %s", collection)
         LOGGER.info("Normalized public matches: %s", normalization)
+        return 0
+
+    if args.command == "collect-steam":
+        result = _collect_steam(
+            _resolve_collection_config(config, args.patches, args),
+            _resolve_limit(args),
+        )
+        LOGGER.info("Collected Steam matches: %s", result)
+        return 0
+
+    if args.command == "normalize-steam":
+        result = _normalize_steam(config, args.patches)
+        LOGGER.info("Normalized Steam matches: %s", result)
+        return 0
+
+    if args.command == "parse-steam":
+        collection = _collect_steam(
+            _resolve_collection_config(config, args.patches, args),
+            _resolve_limit(args),
+        )
+        normalization = _normalize_steam(config, args.patches)
+        LOGGER.info("Collected Steam matches: %s", collection)
+        LOGGER.info("Normalized Steam matches: %s", normalization)
         return 0
 
     parser.error(f"Unknown command: {args.command}")
@@ -66,14 +89,38 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parse = subparsers.add_parser("parse-public")
     _add_collection_limit_flags(parse)
+
+    collect_steam = subparsers.add_parser("collect-steam")
+    _add_collection_limit_flags(collect_steam)
+
+    subparsers.add_parser("normalize-steam")
+
+    parse_steam = subparsers.add_parser("parse-steam")
+    _add_collection_limit_flags(parse_steam)
     return parser
 
 
-def _collect(config: ParserConfig, limit: int | None) -> object:
+def _collect_opendota(config: ParserConfig, limit: int | None) -> object:
     raw_store = RawPublicMatchStore(config.raw_output_dir, schema_version=config.schema_version)
     checkpoint_store = CheckpointStore(config.checkpoint_file)
     with OpenDotaSource(config) as source:
         return collect_public_matches(
+            source=source,
+            raw_store=raw_store,
+            checkpoint_store=checkpoint_store,
+            config=config,
+            limit=limit,
+        )
+
+
+def _collect_steam(config: ParserConfig, limit: int | None) -> object:
+    raw_store = RawPublicMatchStore(
+        config.steam_raw_output_dir,
+        schema_version=config.schema_version,
+    )
+    checkpoint_store = CheckpointStore(config.steam_checkpoint_file)
+    with SteamWebApiSource(config) as source:
+        return collect_steam_matches(
             source=source,
             raw_store=raw_store,
             checkpoint_store=checkpoint_store,
@@ -88,12 +135,12 @@ def _add_collection_limit_flags(parser: argparse.ArgumentParser) -> None:
         "--limit",
         type=int,
         default=None,
-        help="Maximum number of public match rows to process in this run. Default: 100.",
+        help="Maximum number of match rows to process in this run. Default: 100.",
     )
     group.add_argument(
         "--all",
         action="store_true",
-        help="Keep paginating until OpenDota returns an empty page.",
+        help="Keep paginating until the source returns no more matches or reaches a cutoff.",
     )
     patch_group = parser.add_mutually_exclusive_group()
     patch_group.add_argument(
@@ -140,12 +187,29 @@ def _resolve_collection_config(
     return replace(config, collection_min_start_time=family_start)
 
 
-def _normalize(config: ParserConfig, patches_path: Path) -> object:
+def _normalize_opendota(config: ParserConfig, patches_path: Path) -> object:
     raw_store = RawPublicMatchStore(config.raw_output_dir, schema_version=config.schema_version)
     parquet_writer = ParquetMatchWriter(config.normalized_output_dir)
     issue_writer = QualityIssueWriter(config.quality_issues_file, reset=True)
     patch_registry = PatchRegistry.from_yaml(patches_path)
     return normalize_public_matches(
+        raw_store=raw_store,
+        parquet_writer=parquet_writer,
+        issue_writer=issue_writer,
+        patch_registry=patch_registry,
+        config=config,
+    )
+
+
+def _normalize_steam(config: ParserConfig, patches_path: Path) -> object:
+    raw_store = RawPublicMatchStore(
+        config.steam_raw_output_dir,
+        schema_version=config.schema_version,
+    )
+    parquet_writer = ParquetMatchWriter(config.steam_normalized_output_dir)
+    issue_writer = QualityIssueWriter(config.steam_quality_issues_file, reset=True)
+    patch_registry = PatchRegistry.from_yaml(patches_path)
+    return normalize_steam_matches(
         raw_store=raw_store,
         parquet_writer=parquet_writer,
         issue_writer=issue_writer,

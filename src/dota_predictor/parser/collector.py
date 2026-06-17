@@ -8,7 +8,7 @@ from dota_predictor.parser.checkpoint import CheckpointStore
 from dota_predictor.parser.config import ParserConfig
 from dota_predictor.parser.models import now_utc, unix_seconds_to_utc
 from dota_predictor.parser.raw_store import RawPublicMatchStore
-from dota_predictor.parser.source import OpenDotaSource
+from dota_predictor.parser.source import OpenDotaSource, SteamWebApiSource
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,103 @@ def collect_public_matches(
         skipped_by_start_time=skipped_by_start_time,
         pages=pages,
         last_less_than_match_id=less_than_match_id,
+        stopped_by_start_time=stopped_by_start_time,
+    )
+
+
+def collect_steam_matches(
+    *,
+    source: SteamWebApiSource,
+    raw_store: RawPublicMatchStore,
+    checkpoint_store: CheckpointStore,
+    config: ParserConfig,
+    limit: int | None,
+) -> CollectionResult:
+    if limit is not None and limit <= 0:
+        msg = "limit must be greater than zero"
+        raise ValueError(msg)
+
+    checkpoint = checkpoint_store.load()
+    start_at_match_id = checkpoint.less_than_match_id if checkpoint else None
+    fetched = 0
+    written = 0
+    duplicates = 0
+    skipped_by_start_time = 0
+    pages = 0
+    processed = 0
+    stopped_by_start_time = False
+
+    while limit is None or processed < limit:
+        history = source.fetch_match_history(start_at_match_id=start_at_match_id)
+        pages += 1
+        matches = history.get("matches", [])
+        if not isinstance(matches, list):
+            msg = "Steam GetMatchHistory result.matches must be a list"
+            raise ValueError(msg)
+        if not matches:
+            break
+
+        sorted_matches = sorted(matches, key=lambda item: int(item["match_id"]), reverse=True)
+        selected_matches, reached_start_time = _filter_by_min_start_time(
+            sorted_matches,
+            config.collection_min_start_time,
+        )
+        if reached_start_time:
+            stopped_by_start_time = True
+            skipped_by_start_time += len(sorted_matches) - len(selected_matches)
+
+        remaining = None if limit is None else limit - processed
+        batch = selected_matches if remaining is None else selected_matches[:remaining]
+        processed_match_ids: list[int] = []
+
+        for match in batch:
+            match_id = int(match["match_id"])
+            payload = source.fetch_match_details(match_id=match_id)
+            result = raw_store.save(
+                payload,
+                source=source.source_name,
+                endpoint=source.match_details_endpoint,
+                fetched_at=now_utc(),
+            )
+            fetched += 1
+            if result.written:
+                written += 1
+            else:
+                duplicates += 1
+            processed += 1
+            processed_match_ids.append(match_id)
+
+        page_match_ids = [int(match["match_id"]) for match in sorted_matches]
+        if page_match_ids:
+            next_start_at_match_id = min(page_match_ids) - 1
+            start_at_match_id = next_start_at_match_id if next_start_at_match_id > 0 else None
+            checkpoint_store.save(
+                less_than_match_id=start_at_match_id,
+                counters={
+                    "fetched": fetched,
+                    "written": written,
+                    "duplicates": duplicates,
+                    "skipped_by_start_time": skipped_by_start_time,
+                    "pages": pages,
+                },
+            )
+
+        if not processed_match_ids and stopped_by_start_time:
+            break
+        if limit is not None and len(batch) < len(selected_matches):
+            break
+        if stopped_by_start_time:
+            break
+        if int(history.get("results_remaining", 0)) <= 0:
+            break
+
+    return CollectionResult(
+        fetched=fetched,
+        written=written,
+        duplicates=duplicates,
+        skipped_by_start_time=skipped_by_start_time,
+        pages=pages,
+        last_less_than_match_id=start_at_match_id,
         stopped_by_start_time=stopped_by_start_time,
     )
 

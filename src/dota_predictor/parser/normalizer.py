@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from dota_predictor.parser.config import ParserConfig
-from dota_predictor.parser.models import MatchRecord, RawPublicMatch, unix_seconds_to_utc
+from dota_predictor.parser.models import (
+    MatchRecord,
+    RawPublicMatch,
+    RawSteamMatchDetails,
+    unix_seconds_to_utc,
+)
 from dota_predictor.parser.parquet_store import ParquetMatchWriter
 from dota_predictor.parser.patches import PatchRegistry
 from dota_predictor.parser.quality import QualityIssue, QualityIssueWriter, make_issue
@@ -35,6 +40,42 @@ def normalize_public_matches(
     for envelope in raw_store.iter_envelopes():
         raw_seen += 1
         record, issues = normalize_public_match(
+            envelope,
+            patch_registry=patch_registry,
+            config=config,
+        )
+        issue_writer.write_many(issues)
+        issue_count += len(issues)
+        if record is None:
+            rejected += 1
+        else:
+            records.append(record)
+
+    normalized = parquet_writer.write(records)
+    return NormalizationResult(
+        raw_seen=raw_seen,
+        normalized=normalized,
+        rejected=rejected,
+        issues=issue_count,
+    )
+
+
+def normalize_steam_matches(
+    *,
+    raw_store: RawPublicMatchStore,
+    parquet_writer: ParquetMatchWriter,
+    issue_writer: QualityIssueWriter,
+    patch_registry: PatchRegistry,
+    config: ParserConfig,
+) -> NormalizationResult:
+    records: list[MatchRecord] = []
+    raw_seen = 0
+    rejected = 0
+    issue_count = 0
+
+    for envelope in raw_store.iter_envelopes():
+        raw_seen += 1
+        record, issues = normalize_steam_match_details(
             envelope,
             patch_registry=patch_registry,
             config=config,
@@ -106,6 +147,78 @@ def normalize_public_match(
             lobby_type=raw.lobby_type,
             duration=raw.duration,
             has_leaver=None,
+            collected_at=envelope.fetched_at,
+            schema_version=config.schema_version,
+        ),
+        [],
+    )
+
+
+def normalize_steam_match_details(
+    envelope: RawEnvelope,
+    *,
+    patch_registry: PatchRegistry,
+    config: ParserConfig,
+) -> tuple[MatchRecord | None, list[QualityIssue]]:
+    payload = envelope.payload
+    match_id = _extract_match_id(payload)
+    try:
+        raw = RawSteamMatchDetails.from_payload(payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        return None, [
+            make_issue(
+                "schema_error",
+                match_id=match_id,
+                payload={"error": str(exc), "path": str(envelope.path) if envelope.path else None},
+            )
+        ]
+
+    public_like = RawPublicMatch(
+        match_id=raw.match_id,
+        match_seq_num=raw.match_seq_num,
+        radiant_win=raw.radiant_win,
+        start_time=raw.start_time,
+        duration=raw.duration,
+        lobby_type=raw.lobby_type,
+        game_mode=raw.game_mode,
+        avg_rank_tier=None,
+        num_rank_tier=None,
+        cluster=raw.cluster,
+        radiant_team=raw.radiant_team,
+        dire_team=raw.dire_team,
+    )
+    issues = _validate_raw_public_match(public_like, patch_registry=patch_registry, config=config)
+    if issues:
+        return None, issues
+
+    start_time = unix_seconds_to_utc(raw.start_time)
+    patch = patch_registry.find_patch(start_time)
+    if patch is None:
+        return None, [
+            make_issue(
+                "unknown_patch",
+                match_id=raw.match_id,
+                payload={"start_time": start_time.isoformat()},
+            )
+        ]
+
+    return (
+        MatchRecord(
+            match_id=raw.match_id,
+            source=envelope.source,
+            start_time=start_time,
+            patch_id=patch.patch_id,
+            radiant_heroes=_team_5(raw.radiant_team),
+            dire_heroes=_team_5(raw.dire_team),
+            radiant_win=bool(raw.radiant_win),
+            avg_rank_tier=None,
+            radiant_avg_mmr=None,
+            dire_avg_mmr=None,
+            region=raw.cluster,
+            game_mode=raw.game_mode,
+            lobby_type=raw.lobby_type,
+            duration=raw.duration,
+            has_leaver=raw.has_leaver,
             collected_at=envelope.fetched_at,
             schema_version=config.schema_version,
         ),
@@ -191,7 +304,9 @@ def _validate_raw_public_match(
 
 def _extract_match_id(payload: dict[str, Any]) -> int | None:
     try:
-        value = payload.get("match_id")
+        candidate = payload.get("result")
+        source = candidate if isinstance(candidate, dict) else payload
+        value = source.get("match_id")
         if value is None:
             return None
         return int(value)
