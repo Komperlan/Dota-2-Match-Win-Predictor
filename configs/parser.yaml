@@ -1,0 +1,19 @@
+source_base_url: "https://api.opendota.com/api"
+public_matches_endpoint: "/publicMatches"
+request_delay_seconds: 1.0
+max_retries: 5
+backoff_initial_seconds: 1.0
+backoff_max_seconds: 30.0
+timeout_seconds: 20.0
+min_rank: null
+max_rank: null
+allowed_game_modes:
+  - 22
+allowed_lobby_types:
+  - 7
+min_duration_seconds: 600
+raw_output_dir: "data/raw/opendota/public_matches"
+normalized_output_dir: "data/normalized/matches"
+checkpoint_file: "artifacts/checkpoints/opendota_public.json"
+quality_issues_file: "artifacts/quality/public_matches_issues.jsonl"
+schema_version: 1

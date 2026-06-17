@@ -1,0 +1,8 @@
+# Bootstrap catalog for parser development.
+# Replace this broad range with verified Dota 2 patch boundaries before training.
+patches:
+  - patch_id: "bootstrap"
+    version: "bootstrap"
+    started_at: "1970-01-01T00:00:00Z"
+    ended_at: null
+    major: true
